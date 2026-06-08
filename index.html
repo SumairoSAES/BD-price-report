@@ -1488,6 +1488,7 @@ function niceTicks(min,max,count){
   for(let v=start; v<=max+1e-9; v+=step) out.push(+v.toFixed(6));
   return out;
 }
+//hi guys
 function renderMonthlyChart(pairs){
   const wrap=$("mChartWrap");
   const pts=(pairs||[]).map(([d,v])=>({t:pd(d).getTime(), p:v, d}));

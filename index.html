@@ -357,6 +357,8 @@ tbody td{padding:3px 10px;line-height:1.35}
     <nav class="pagenav" id="pageNav">
       <button data-page="daily" class="on">Daily</button>
       <button data-page="monthly">Monthly</button>
+      <button data-page="index">Daily Index</button>
+      <button data-page="compare">Compare</button>
     </nav>
     <span class="srclab">Sources</span>
     <div class="segmented multi" id="srcToggle">
@@ -543,6 +545,81 @@ tbody td{padding:3px 10px;line-height:1.35}
       </div>
     </div>
   </div><!-- /pageMonthly -->
+
+  <!-- ============ PAGE: DAILY INDEX REPORT ============ -->
+  <div class="page" id="pageIndex" style="display:none">
+    <div class="topbar2">
+      <div class="title-block">
+        <p class="kicker">Daily Index Report</p>
+        <h1>Index Snapshot</h1>
+      </div>
+      <div class="spacer"></div>
+      <div class="minicard">
+        <div class="mcl">Report Date</div>
+        <input type="date" id="idxDate" class="msel mc" style="min-width:150px">
+        <div class="mcsub" id="idxSub">native prices · last 3-yr high/low</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="phead">
+        <h3>Index — <span id="idxDateLbl"></span></h3>
+        <div class="pright"><span class="meta" id="idxMeta"></span><button class="csvbtn" id="csvIndex">⤓ CSV</button></div>
+      </div>
+      <div class="tbl-scroll" style="max-height:none">
+        <table class="mtbl" id="idxTable"><thead id="idxThead"></thead><tbody id="idxTbody"></tbody></table>
+      </div>
+    </div>
+  </div><!-- /pageIndex -->
+
+  <!-- ============ PAGE: COMPARE PRICES ============ -->
+  <div class="page" id="pageCompare" style="display:none">
+    <div class="topbar2">
+      <div class="title-block">
+        <p class="kicker">Compare Prices · USD / MT</p>
+        <h1>Compare Commodities</h1>
+      </div>
+      <div class="spacer"></div>
+      <button class="btn-ghost" id="cpReset" title="Reset comparison">⟲ Reset</button>
+    </div>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="panel">
+          <div class="sec">
+            <div class="sh">Product</div>
+            <div class="mselwrap"><select class="msel" id="cpProd"></select></div>
+          </div>
+          <div class="sec">
+            <div class="sh">Commodities <span style="font-weight:500;text-transform:none;letter-spacing:0;color:var(--muted)">· multi-select</span></div>
+            <div class="prodlist" id="cpList" style="max-height:260px"></div>
+          </div>
+          <div class="sec">
+            <div class="sh">Period</div>
+            <div class="presets" id="cpPresets">
+              <button data-pr="ALL">All Data</button>
+              <button data-pr="THIS_MONTH">This Month</button>
+              <button data-pr="1M">Last 1 Month</button>
+              <button data-pr="3M" class="on">Last 3 Months</button>
+              <button data-pr="6M">Last 6 Months</button>
+              <button data-pr="1Y">Last 1 Year</button>
+            </div>
+          </div>
+          <div class="sec">
+            <div class="sh">Date Range</div>
+            <div class="dates"><div><label>From</label><input type="date" id="cpFrom"></div><div><label>To</label><input type="date" id="cpTo"></div></div>
+          </div>
+        </div>
+      </aside>
+      <div class="content">
+        <div class="panel">
+          <div class="phead">
+            <h3>Price Comparison</h3>
+            <div class="pright"><span class="meta" id="cpMeta"></span><button class="csvbtn" id="csvCompare">⤓ CSV</button></div>
+          </div>
+          <div class="tbl-scroll"><table class="mtbl" id="cpTable"><thead id="cpThead"></thead><tbody id="cpTbody"></tbody><tfoot id="cpTfoot"></tfoot></table></div>
+        </div>
+      </div>
+    </div>
+  </div><!-- /pageCompare -->
 </div>
 
 <script>
@@ -1075,13 +1152,17 @@ function finishLoad(ds){
 let activePage="daily";
 function switchPage(p){
   activePage=p;
-  $("pageDaily").style.display = p==="daily" ? "block":"none";
-  $("pageMonthly").style.display = p==="monthly" ? "block":"none";
+  [["daily","pageDaily"],["monthly","pageMonthly"],["index","pageIndex"],["compare","pageCompare"]].forEach(x=>{ const el=$(x[1]); if(el) el.style.display = x[0]===p?"block":"none"; });
   document.querySelectorAll("#pageNav button").forEach(b=>b.classList.toggle("on",b.dataset.page===p));
   renderActive();
 }
-function renderActive(){ if(activePage==="monthly") renderMonthly(); else recompute(); }
-function syncSlicers(){ buildProducts(); buildCommodities(); buildSearch(); buildMonthlySlicers(); buildCurrencyUI(); }
+function renderActive(){
+  if(activePage==="monthly") renderMonthly();
+  else if(activePage==="index") renderIndex();
+  else if(activePage==="compare") renderCompare();
+  else recompute();
+}
+function syncSlicers(){ buildProducts(); buildCommodities(); buildSearch(); buildMonthlySlicers(); buildCurrencyUI(); buildCompareSlicers(); }
 
 /* ===================== INIT / RESET ===================== */
 let wired=false;
@@ -1092,6 +1173,10 @@ function applyDefaults(){
   if(!best) best=DATA.series[0];
   state.uid=best?best.uid:null;
   defaultRep(byUid[state.uid]);
+  // new-page defaults
+  state.idxDate=iso(GMAX);
+  state.cmp=[]; state.cProd="ALL"; state.cPreset="3M";
+  const r=presetRangeGlobal("3M"); state.cFrom=r.from; state.cTo=r.to;
 }
 function resetAll(){
   applyDefaults();
@@ -1283,6 +1368,119 @@ function renderMonthly(){
   renderMonthlyChart(m.pts);
 }
 
+/* ===================== shared helpers for the new pages ===================== */
+function usdMtRep(s){ const r=(s.reps||[]); return r.find(x=>x.cur==="USD"&&x.uom==="MT") || r.find(x=>x.role==="target") || r[0]; }
+function origRep(s){ const r=(s.reps||[]); return r.find(x=>x.role==="original") || r[0]; }
+function presetRangeGlobal(name){
+  const dmin=iso(GMIN), dmax=iso(GMAX);
+  if(name==="ALL"||!name) return {from:dmin,to:dmax};
+  const now=new Date(), cy=now.getFullYear(), cm=now.getMonth(), prevEnd=new Date(cy,cm,0);
+  let start,end;
+  if(name==="THIS_MONTH"){start=new Date(cy,cm,1);end=now;}
+  else if(name==="1M"){start=new Date(cy,cm-1,1);end=prevEnd;}
+  else if(name==="3M"){start=new Date(cy,cm-3,1);end=now;}
+  else if(name==="6M"){start=new Date(cy,cm-6,1);end=now;}
+  else if(name==="1Y"){start=new Date(cy,cm-12,1);end=now;}
+  else return {from:dmin,to:dmax};
+  let f=iso(start),t=iso(end); if(f<dmin)f=dmin; if(f>dmax)f=dmax; if(t>dmax)t=dmax; if(t<dmin)t=dmin;
+  return {from:f,to:t};
+}
+function valueAsOf(arr, date){ let res=null; for(let i=0;i<arr.length;i++){ if(arr[i][0]<=date) res={v:arr[i][1],d:arr[i][0],i:i}; else break; } return res; }
+
+/* ===================== DAILY INDEX REPORT ===================== */
+function indexRows(date){
+  const list=seriesForSource().slice().sort((a,b)=>a.comm.localeCompare(b.comm));
+  const dd=pd(date), start3=iso(new Date(dd.getFullYear()-3, dd.getMonth(), dd.getDate()));
+  const out=[]; let n=0;
+  list.forEach(s=>{ const rep=origRep(s); const closes=rep.data; const asof=valueAsOf(closes,date); if(!asof) return; n++;
+    const prev=asof.i>0?closes[asof.i-1][1]:null; const diff=prev==null?null:+(asof.v-prev).toFixed(2);
+    const hiArr=(rep.high&&rep.high.length)?rep.high:closes, loArr=(rep.low&&rep.low.length)?rep.low:closes;
+    let H={v:-Infinity,d:null},L={v:Infinity,d:null};
+    for(const x of hiArr){ if(x[0]>=start3&&x[0]<=date&&x[1]>H.v)H={v:x[1],d:x[0]}; }
+    for(const x of loArr){ if(x[0]>=start3&&x[0]<=date&&x[1]<L.v)L={v:x[1],d:x[0]}; }
+    out.push({n:n, s:s, rep:rep, price:asof.v, asof:asof.d, diff:diff, H:(H.d?H:null), L:(L.d?L:null)});
+  });
+  return out;
+}
+function renderIndex(){
+  const date=state.idxDate||iso(GMAX);
+  $("idxDateLbl").textContent=fdate(date);
+  if($("idxDate")) $("idxDate").value=date;
+  const head=["#","Code","Commodity","Unit","Price","As of","Δ vs Prev","3Y High","High Date","3Y Low","Low Date"];
+  $("idxThead").innerHTML="<tr>"+head.map((h,i)=>`<th class="${i>=4&&i!==5&&i!==8&&i!==10?'':'l'}">${h}</th>`).join("")+"</tr>";
+  const rows=indexRows(date);
+  let body="";
+  rows.forEach(r=>{ const dcls=r.diff==null?"":(r.diff>0?"up":r.diff<0?"down":"");
+    const asofTxt=r.asof===date?"":fdate(r.asof);
+    body+=`<tr>
+      <td class="l">${r.n}</td>
+      <td class="l code-c">${esc(r.s.code)}</td>
+      <td class="l">${esc(r.s.comm)} <span class="srcbadge" style="background:${r.s.src==='ICIS'?'var(--accent)':'var(--navy)'}">${r.s.src}</span></td>
+      <td class="l">${r.rep.cur}/${r.rep.uom}</td>
+      <td class="cur">${fmt(r.price)}</td>
+      <td class="l" style="color:${asofTxt?'var(--down)':'var(--muted)'};font-size:11px">${asofTxt||'on date'}</td>
+      <td class="cur ${dcls}">${r.diff==null?'—':fmtDiff(r.diff)}</td>
+      <td class="cur">${r.H?fmt(r.H.v):'—'}</td>
+      <td class="l" style="font-size:11px">${r.H?fdate(r.H.d):'—'}</td>
+      <td class="cur">${r.L?fmt(r.L.v):'—'}</td>
+      <td class="l" style="font-size:11px">${r.L?fdate(r.L.d):'—'}</td>
+    </tr>`; });
+  $("idxTbody").innerHTML=body || `<tr><td colspan="11" style="padding:30px;color:var(--muted)">No data on or before this date.</td></tr>`;
+  $("idxMeta").textContent=rows.length+" commodities · "+enabledSrcs().join("+");
+}
+function exportIndexCSV(){
+  const date=state.idxDate||iso(GMAX); const rows=indexRows(date);
+  const out=[["#","Code","Commodity","Source","Currency","Unit","Price","Price as-of date","Diff vs Prev","3Y High","3Y High Date","3Y Low","3Y Low Date"]];
+  rows.forEach(r=>out.push([r.n,r.s.code,r.s.comm,r.s.src,r.rep.cur,r.rep.uom,r.price.toFixed(2),r.asof,r.diff==null?"":r.diff.toFixed(2),r.H?r.H.v.toFixed(2):"",r.H?r.H.d:"",r.L?r.L.v.toFixed(2):"",r.L?r.L.d:""]));
+  downloadCSV("daily_index_"+date+".csv", out);
+}
+
+/* ===================== COMPARE PRICES (USD / MT) ===================== */
+function buildCompareSlicers(){
+  const cp=$("cpProd"); if(!cp) return;
+  const ss=seriesForSource();
+  cp.innerHTML="";
+  const prods={}; ss.forEach(s=>prods[s.prod]=(prods[s.prod]||0)+1);
+  const oAll=document.createElement("option"); oAll.value="ALL"; oAll.textContent="All Products"; if((state.cProd||"ALL")==="ALL")oAll.selected=true; cp.appendChild(oAll);
+  Object.keys(prods).sort().forEach(nm=>{ const o=document.createElement("option"); o.value=nm; o.textContent=nm+" ("+prods[nm]+")"; if(state.cProd===nm)o.selected=true; cp.appendChild(o); });
+  cp.onchange=()=>{ state.cProd=cp.value; buildCompareSlicers(); };
+  const list=ss.filter(s=> (state.cProd&&state.cProd!=="ALL")? s.prod===state.cProd : true).sort((a,b)=>a.comm.localeCompare(b.comm));
+  const box=$("cpList"); box.innerHTML=""; state.cmp=state.cmp||[];
+  list.forEach(s=>{ const on=state.cmp.indexOf(s.uid)!==-1;
+    const b=document.createElement("button"); b.className="prod"+(on?" on":"");
+    b.innerHTML=`<span style="display:flex;gap:7px;align-items:center;min-width:0"><span style="font-family:'IBM Plex Mono';font-size:11px;color:${on?'#fff':'var(--accent)'}">${on?'✓':'+'}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.comm)}</span></span><span class="cnt">${esc(s.code)}</span>`;
+    b.onclick=()=>{ const i=state.cmp.indexOf(s.uid); if(i===-1)state.cmp.push(s.uid); else state.cmp.splice(i,1); buildCompareSlicers(); renderCompare(); };
+    box.appendChild(b); });
+  if(!state.cPreset){ state.cPreset="3M"; const r=presetRangeGlobal("3M"); state.cFrom=r.from; state.cTo=r.to; }
+  document.querySelectorAll("#cpPresets button").forEach(b=>b.classList.toggle("on",b.dataset.pr===state.cPreset));
+  if($("cpFrom")){ $("cpFrom").value=state.cFrom; $("cpTo").value=state.cTo; $("cpFrom").min=iso(GMIN); $("cpFrom").max=iso(GMAX); $("cpTo").min=iso(GMIN); $("cpTo").max=iso(GMAX); }
+}
+function compareData(){
+  const sel=(state.cmp||[]).map(u=>byUid[u]).filter(Boolean);
+  const from=state.cFrom||iso(GMIN), to=state.cTo||iso(GMAX);
+  const maps=sel.map(s=>{ const m={}; usdMtRep(s).data.forEach(x=>{ if(x[0]>=from&&x[0]<=to) m[x[0]]=x[1]; }); return m; });
+  const set={}; maps.forEach(m=>Object.keys(m).forEach(d=>set[d]=1)); const dates=Object.keys(set).sort();
+  const avgs=maps.map(m=>{ const v=Object.values(m); return v.length? v.reduce((a,b)=>a+b,0)/v.length : null; });
+  return {sel, from, to, maps, dates, avgs};
+}
+function renderCompare(){
+  const cd=compareData();
+  if(!cd.sel.length){ $("cpThead").innerHTML=""; $("cpTbody").innerHTML=`<tr><td style="padding:30px;color:var(--muted)">Pick one or more commodities on the left to compare (shown in USD/MT).</td></tr>`; $("cpTfoot").innerHTML=""; $("cpMeta").textContent=""; return; }
+  $("cpThead").innerHTML="<tr><th class='l'>Date</th>"+cd.sel.map(s=>`<th title="${esc(s.comm)}">${esc(s.code)}</th>`).join("")+"</tr>";
+  const dates=cd.dates.slice().reverse();
+  $("cpTbody").innerHTML=dates.map(d=>"<tr><td class='l mono'>"+fdate(d)+"</td>"+cd.maps.map(m=>"<td class='cur'>"+(m[d]!=null?fmt(m[d]):"—")+"</td>").join("")+"</tr>").join("");
+  $("cpTfoot").innerHTML="<tr><td class='l'>Average · USD/MT</td>"+cd.avgs.map(a=>"<td>"+(a==null?"—":fmt(a))+"</td>").join("")+"</tr>";
+  $("cpMeta").textContent=cd.sel.length+" commodities · "+cd.dates.length+" dates · "+fdate(cd.from)+" – "+fdate(cd.to);
+}
+function exportCompareCSV(){
+  const cd=compareData(); if(!cd.sel.length) return;
+  const out=[["Date"].concat(cd.sel.map(s=>s.code+" ("+s.comm+") USD/MT"))];
+  cd.dates.forEach(d=>out.push([d].concat(cd.maps.map(m=>m[d]!=null?m[d].toFixed(2):""))));
+  out.push([]); out.push(["Average (USD/MT)"].concat(cd.avgs.map(a=>a==null?"":a.toFixed(2))));
+  downloadCSV("compare_USD_MT_"+cd.from+"_to_"+cd.to+".csv", out);
+}
+function cpApplyPreset(name){ state.cPreset=name; const r=presetRangeGlobal(name); state.cFrom=r.from; state.cTo=r.to; buildCompareSlicers(); renderCompare(); }
+
 /* ===================== PERIOD / RANGE (calendar months) ===================== */
 function applyPreset(name, silent){
   state.preset=name;
@@ -1360,6 +1558,16 @@ function wire(){
   $("csvDaily").onclick=exportDailyCSV;
   $("csvMonthly").onclick=exportMonthlyCSV;
   $("resetBtn").onclick=resetAll;
+  // Daily Index page
+  if($("idxDate")){ $("idxDate").value=state.idxDate||iso(GMAX); $("idxDate").min=iso(GMIN); $("idxDate").max=iso(GMAX);
+    $("idxDate").onchange=()=>{ state.idxDate=$("idxDate").value||iso(GMAX); renderIndex(); }; }
+  if($("csvIndex")) $("csvIndex").onclick=exportIndexCSV;
+  // Compare page
+  document.querySelectorAll("#cpPresets button").forEach(b=>b.onclick=()=>cpApplyPreset(b.dataset.pr));
+  if($("cpFrom")) $("cpFrom").onchange=()=>{ let f=$("cpFrom").value,t=$("cpTo").value; if(f&&t&&f>t){t=f;$("cpTo").value=t;} state.cFrom=f;state.cTo=t;state.cPreset="CUSTOM"; document.querySelectorAll("#cpPresets button").forEach(x=>x.classList.remove("on")); renderCompare(); };
+  if($("cpTo")) $("cpTo").onchange=()=>{ let f=$("cpFrom").value,t=$("cpTo").value; if(f&&t&&f>t){f=t;$("cpFrom").value=f;} state.cFrom=f;state.cTo=t;state.cPreset="CUSTOM"; document.querySelectorAll("#cpPresets button").forEach(x=>x.classList.remove("on")); renderCompare(); };
+  if($("csvCompare")) $("csvCompare").onclick=exportCompareCSV;
+  if($("cpReset")) $("cpReset").onclick=()=>{ state.cmp=[]; state.cProd="ALL"; cpApplyPreset("3M"); };
 }
 
 /* ===================== COMPUTE MODEL ===================== */

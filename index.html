@@ -284,6 +284,13 @@ tbody tr:hover td{background:var(--surface2)}
 .pright{display:flex;align-items:center;gap:12px}
 .csvbtn{border:1px solid var(--line2);background:var(--surface);color:var(--accent);padding:5px 11px;border-radius:7px;font-size:11px;font-weight:700;letter-spacing:.02em;transition:all .15s;white-space:nowrap}
 .csvbtn:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+/* thick vertical separators after Code, Low Price, Weekly Avg */
+table th.tk, table td.tk{ border-right:2px solid var(--ink2) !important; }
+td.hi-c{ color:var(--up); } td.lo-c{ color:var(--down); }
+/* platform badge next to "Daily Assessments" */
+.srcbadge{ display:inline-block; vertical-align:middle; margin-left:8px; font-family:"IBM Plex Mono",monospace; font-size:10px; font-weight:700; letter-spacing:.08em;
+  color:#fff; background:var(--navy); padding:3px 9px; border-radius:6px; }
+.srcbadge:empty{ display:none; }
 /* ---- compact table (overrides) so ~30 rows fit ---- */
 .tbl-scroll{max-height:min(72vh,760px)}
 table{font-size:11.5px}
@@ -434,7 +441,7 @@ tbody td{padding:3px 10px;line-height:1.35}
     <div class="content">
       <div class="panel">
         <div class="phead">
-          <h3>Daily Assessments</h3>
+          <h3>Daily Assessments <span class="srcbadge" id="dailySrcBadge"></span></h3>
           <div class="pright"><span class="meta" id="tblMeta"></span><button class="csvbtn" id="csvDaily">⤓ CSV</button></div>
         </div>
         <div class="tbl-scroll">
@@ -443,10 +450,12 @@ tbody td{padding:3px 10px;line-height:1.35}
               <tr>
                 <th class="l sortable" id="thDate">Date <span id="sortArrow">▲</span></th>
                 <th class="l">Day</th>
-                <th class="l">Code</th>
+                <th class="l tk">Code</th>
+                <th>High Price</th>
+                <th class="tk">Low Price</th>
                 <th>Price</th>
                 <th>Δ vs Prev Day</th>
-                <th>Weekly Avg <span style="font-weight:500;text-transform:none;letter-spacing:0;color:var(--muted)">(Fri)</span></th>
+                <th class="tk">Weekly Avg <span style="font-weight:500;text-transform:none;letter-spacing:0;color:var(--muted)">(Fri)</span></th>
               </tr>
             </thead>
             <tbody id="tblBody"></tbody>
@@ -599,10 +608,21 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     return row && c < row.length ? row[c] : null;
   }
 
-  // ---- classify a workbook by its content (robust to file renames) ----
+  // ---- classify a workbook by its content (robust to file/sheet renames) ----
   function classify(file){
     var names = Object.keys(file.sheets);
-    if (names.indexOf("Petchem Asia") !== -1) return "PLATTS_DATA";
+    // PLATTS data: any sheet with the "PLATTS MARKET DATA" title or an AssessDate marker
+    for (var n=0;n<names.length;n++){
+      var rs = file.sheets[names[n]] || [];
+      for (var i=0;i<Math.min(rs.length,40);i++){
+        var row = rs[i]||[];
+        for (var j=0;j<row.length;j++){
+          var v = S(row[j]);
+          if (/PLATTS MARKET DATA/i.test(v)) return "PLATTS_DATA";
+          if (v==="AssessDate" && (isDateCell(cell(rs,i+1,j))||isDateCell(cell(rs,i+2,j)))) return "PLATTS_DATA";
+        }
+      }
+    }
     if (names.indexOf("ICIS") !== -1) return "ICIS_DATA";
     // header sniff on first sheet
     var rows = file.sheets[names[0]] || [];
@@ -655,29 +675,43 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     // Currency = the row immediately above the AssessDate marker; the measuring-unit
     // row is the one above that. In the target sheet (two unit rows: original then
     // target) this correctly takes the lower TARGET row, matching the file layout.
-    var uomRow = aRow-2, curRow = aRow-1;
+    var uomRow = aRow-2, curRow = aRow-1, bateRow = aRow;  // marker row carries c/h/l per column
     var headerLen = (rows[codeRow]||[]).length;
+    // group the (up to 3) columns of each code, mapping them to close/high/low by bate letter
+    var byCode = {}, codeOrder = [];
     for (var c=aCol+1;c<headerLen;c++){
       var code = S(cell(rows,codeRow,c));
       if (!code) continue;
-      var comm = S(cell(rows,commRow,c));
-      var uom  = S(cell(rows,uomRow,c)) || "MT";
-      var cur  = S(cell(rows,curRow,c)) || "USD";
-      if (plattsMap && plattsMap[code]){          // optional enrichment/override
-        if (plattsMap[code].comm) comm = plattsMap[code].comm;
-        if (plattsMap[code].uom)  uom  = plattsMap[code].uom;
+      if (!byCode[code]){
+        var comm = S(cell(rows,commRow,c));
+        var uom  = S(cell(rows,uomRow,c)) || "MT";
+        var cur  = S(cell(rows,curRow,c)) || "USD";
+        if (plattsMap && plattsMap[code]){
+          if (plattsMap[code].comm) comm = plattsMap[code].comm;
+          if (plattsMap[code].uom)  uom  = plattsMap[code].uom;
+        }
+        byCode[code] = { code:code, comm:comm, uom:uom, cur:cur, prod:(comm?comm.split(/\s+/)[0]:code), cols:{} };
+        codeOrder.push(code);
       }
-      var prod = comm ? comm.split(/\s+/)[0] : code;
-      var data = [];
-      for (var r=aRow+1;r<rows.length;r++){
-        var d = toDateStr(cell(rows,r,dateCol));
-        if (!d) continue;
-        var p = num(cell(rows,r,c));
-        if (p != null) data.push([d,p]);
-      }
-      data.sort(function(a,b){ return a[0]<b[0]?-1:a[0]>b[0]?1:0; });
-      out.push({src:"PLATTS",code:code,comm:comm,prod:prod,uom:uom,cur:cur,data:data});
+      var bate = S(cell(rows,bateRow,c)).toLowerCase();
+      var key = bate==="h" ? "high" : bate==="l" ? "low" : "close";
+      byCode[code].cols[key] = c;
     }
+    function colSeries(col){
+      var arr=[]; if(col==null) return arr;
+      for (var r=aRow+1;r<rows.length;r++){
+        var d = toDateStr(cell(rows,r,dateCol)); if(!d) continue;
+        var p = num(cell(rows,r,col)); if(p!=null) arr.push([d,p]);
+      }
+      arr.sort(function(a,b){ return a[0]<b[0]?-1:a[0]>b[0]?1:0; });
+      return arr;
+    }
+    codeOrder.forEach(function(code){
+      var e=byCode[code];
+      var closeCol = e.cols.close!=null ? e.cols.close : (e.cols.high!=null ? e.cols.high : e.cols.low);
+      out.push({ src:"PLATTS", code:code, comm:e.comm, prod:e.prod, uom:e.uom, cur:e.cur,
+                 data:colSeries(closeCol), high:colSeries(e.cols.high), low:colSeries(e.cols.low) });
+    });
     return out;
   }
 
@@ -767,7 +801,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       if(!e.prod && s.prod) e.prod=s.prod;
       var key = s.cur+"|"+s.uom;
       if(!e.reps.some(function(r){return (r.cur+"|"+r.uom)===key;}))
-        e.reps.push({cur:s.cur, uom:s.uom, data:s.data, role:isTarget?"target":"original"});
+        e.reps.push({cur:s.cur, uom:s.uom, data:s.data, high:s.high||[], low:s.low||[], role:isTarget?"target":"original"});
     }
     tList.forEach(function(s){ add(s, true); });    // target first -> default representation
     oList.forEach(function(s){ add(s, false); });
@@ -798,18 +832,32 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     var warnings = [];
     if (byType.PLATTS_DATA){
       var plattsFiles = byType.PLATTS_DATA;
-      // prefer a file that actually has the second "(2)" sheet (richest: target + original)
-      var pf = null;
-      for (var pfi=0; pfi<plattsFiles.length; pfi++){
-        if (Object.keys(plattsFiles[pfi].sheets).some(function(n){return /\(\s*2\s*\)/.test(n);})){ pf = plattsFiles[pfi]; break; }
+      // prefer a file that has two PLATTS data sheets (target + original)
+      function dataSheets(f){
+        return Object.keys(f.sheets).filter(function(nm){
+          var rs=f.sheets[nm]||[];
+          for(var i=0;i<Math.min(rs.length,40);i++){ var row=rs[i]||[]; for(var j=0;j<row.length;j++){
+            if(/PLATTS MARKET DATA/i.test(S(row[j]))) return true;
+            if(S(row[j])==="AssessDate" && (isDateCell(cell(rs,i+1,j))||isDateCell(cell(rs,i+2,j)))) return true;
+          } }
+          return false;
+        });
       }
-      if (!pf) pf = plattsFiles[0];
-      var pnames = Object.keys(pf.sheets);
-      // sheet 1 "Petchem Asia" = target (defined currency/unit); sheet 2 "...(2)" = original native
-      var tName = pnames.indexOf("Petchem Asia")!==-1 ? "Petchem Asia"
-                : (pnames.filter(function(n){return /petchem/i.test(n) && !/\(\s*2\s*\)/.test(n);})[0] || pnames[0]);
-      var oName = pnames.filter(function(n){return /\(\s*2\s*\)/.test(n);})[0]
-                || pnames.filter(function(n){return /petchem/i.test(n) && n!==tName;})[0] || null;
+      var pf=null, pds=[];
+      for (var pfi=0; pfi<plattsFiles.length; pfi++){ var ds2=dataSheets(plattsFiles[pfi]); if(ds2.length>=2){ pf=plattsFiles[pfi]; pds=ds2; break; } }
+      if (!pf){ pf=plattsFiles[0]; pds=dataSheets(pf); if(!pds.length) pds=Object.keys(pf.sheets); }
+      // classify each data sheet: fixed/target (FX-HISTORY or "fixed") vs original
+      function isFixed(nm){
+        if(/fixed/i.test(nm)) return true;
+        if(/original/i.test(nm)) return false;
+        var rs=pf.sheets[nm]||[];
+        for(var i=0;i<Math.min(rs.length,30);i++){ var row=rs[i]||[]; for(var j=0;j<row.length;j++){ if(/FX-?HISTORY/i.test(S(row[j]))) return true; } }
+        return null;
+      }
+      var tName=null, oName=null;
+      pds.forEach(function(nm){ var f=isFixed(nm); if(f===true && !tName) tName=nm; else if(f===false && !oName) oName=nm; });
+      if(!tName) tName = pds.filter(function(n){return n!==oName;})[0] || pds[0];
+      if(!oName) oName = pds.filter(function(n){return n!==tName;})[0] || null;
       var tList = parsePlatts(pf.sheets[tName]||[], plattsMap);
       var oList = oName ? parsePlatts(pf.sheets[oName]||[], plattsMap) : [];
       series = series.concat(mergePlattsReps(tList, oList));
@@ -824,7 +872,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     // keep only series that actually have data
     series = series.filter(function(s){ return s.data && s.data.length; });
     // every series carries representation(s); ICIS has a single native rep
-    series.forEach(function(s){ if(!s.reps) s.reps=[{cur:s.cur, uom:s.uom, data:s.data, role:"original"}]; });
+    series.forEach(function(s){ if(!s.reps) s.reps=[{cur:s.cur, uom:s.uom, data:s.data, high:s.high||[], low:s.low||[], role:"original"}]; });
     // composite uid (collision-proof across sources)
     series.forEach(function(s){ s.uid = s.src + "|" + s.code; });
 
@@ -929,8 +977,9 @@ function downloadCSV(filename, rows){
 }
 function exportDailyCSV(){
   const m=buildModel(); if(!m) return; const s=m.series, lab=curLabel(s), un=uomLabel(s);
-  const rows=[["Date","Weekday","Code","Commodity","Price ("+lab+"/"+un+")","Diff vs Prev","Weekly Avg"]];
-  m.rows.forEach(r=>rows.push([r.d, WD[pd(r.d).getDay()], s.code, s.comm,
+  const rows=[["Date","Weekday","Code","High Price","Low Price","Price ("+lab+"/"+un+")","Diff vs Prev","Weekly Avg"]];
+  m.rows.forEach(r=>rows.push([r.d, WD[pd(r.d).getDay()], s.code,
+    r.high==null?"":r.high.toFixed(2), r.low==null?"":r.low.toFixed(2),
     r.p.toFixed(2), r.diff==null?"":r.diff.toFixed(2), r.weekly==null?"":r.weekly.toFixed(2)]));
   rows.push([]); rows.push(["Average Price",(m.avgP==null?"":m.avgP.toFixed(2))]);
   rows.push(["Weekly Average Price",(m.avgW==null?"":m.avgW.toFixed(2))]);
@@ -1249,9 +1298,9 @@ function applyPreset(name, silent){
       let start, end;
       if(name==="THIS_MONTH"){ start=new Date(cy,cm,1); end=now; }
       else if(name==="1M"){ start=new Date(cy,cm-1,1); end=prevMonthEnd; }
-      else if(name==="3M"){ start=new Date(cy,cm-3,1); end=prevMonthEnd; }
-      else if(name==="6M"){ start=new Date(cy,cm-6,1); end=prevMonthEnd; }
-      else if(name==="1Y"){ start=new Date(cy,cm-12,1); end=prevMonthEnd; }
+      else if(name==="3M"){ start=new Date(cy,cm-3,1); end=now; }
+      else if(name==="6M"){ start=new Date(cy,cm-6,1); end=now; }
+      else if(name==="1Y"){ start=new Date(cy,cm-12,1); end=now; }
       else { start=pd(dmin); end=pd(dmax); }
       let f=iso(start), t=iso(end);
       if(f<dmin) f=dmin; if(f>dmax) f=dmax;
@@ -1317,7 +1366,11 @@ function wire(){
 function buildModel(){
   const s=byUid[state.uid];
   if(!s) return null;
-  const full=activeRep(s).data, from=state.from, to=state.to;
+  const rep=activeRep(s);
+  const full=rep.data, from=state.from, to=state.to;
+  const hiMap={}, loMap={};
+  (rep.high||[]).forEach(x=>hiMap[x[0]]=x[1]);
+  (rep.low||[]).forEach(x=>loMap[x[0]]=x[1]);
   // window indices
   let lo=0; while(lo<full.length && full[lo][0]<from) lo++;
   let hi=full.length-1; while(hi>=0 && full[hi][0]>to) hi--;
@@ -1334,18 +1387,22 @@ function buildModel(){
         if(dd>=startD && dd<=d){ sum+=full[j][1]; c++; } }
       weekly = c ? +(sum/c).toFixed(2) : null;
     }
-    rows.push({d,p,diff,weekly});
+    rows.push({d, p, high:(hiMap[d]!=null?hiMap[d]:null), low:(loMap[d]!=null?loMap[d]:null), diff, weekly});
   }
-  // averages over filtered rows
+  // averages over filtered rows (Price = close)
   const ps=rows.map(r=>r.p);
   const avgP = ps.length ? ps.reduce((a,b)=>a+b,0)/ps.length : null;
   const wk=rows.filter(r=>r.weekly!=null).map(r=>r.weekly);
   const avgW = wk.length ? wk.reduce((a,b)=>a+b,0)/wk.length : null;
-  // high / low WITHIN the selected timeline window (per requirement)
+  // Period High = max daily HIGH, Period Low = min daily LOW (fall back to close)
   let H={p:-Infinity,d:null}, L={p:Infinity,d:null};
-  for(const r of rows){ if(r.p>H.p)H={p:r.p,d:r.d}; if(r.p<L.p)L={p:r.p,d:r.d}; }
+  for(const r of rows){ const hv=r.high!=null?r.high:r.p, lv=r.low!=null?r.low:r.p;
+    if(hv>H.p)H={p:hv,d:r.d}; if(lv<L.p)L={p:lv,d:r.d}; }
   if(H.d===null){H={p:null,d:null};L={p:null,d:null};}
-  return {series:s, rows, avgP, avgW, hi:H, lo:L};
+  // close-based extremes (for chart dot markers)
+  let cH={p:-Infinity,d:null}, cL={p:Infinity,d:null};
+  for(const r of rows){ if(r.p>cH.p)cH={p:r.p,d:r.d}; if(r.p<cL.p)cL={p:r.p,d:r.d}; }
+  return {series:s, rows, avgP, avgW, hi:H, lo:L, closeHi:(cH.d?cH:null), closeLo:(cL.d?cL:null)};
 }
 
 /* ===================== RENDER ===================== */
@@ -1354,12 +1411,14 @@ function recompute(){
   renderCards(m); renderTable(m);
   const pts = m ? m.rows.map(r=>({t:pd(r.d).getTime(), p:r.p, d:r.d})) : [];
   window.__pts = pts;
+  window.__mark = m ? {hi:m.closeHi, lo:m.closeLo} : null;
   renderChart(pts);
   if(m){
     $("chartTitle").textContent=m.series.comm;
     $("chartMeta").textContent=`${m.series.code} · ${curLabel(m.series)}/${uomLabel(m.series)} · ${m.series.src}`;
     $("tblMeta").textContent=`${m.rows.length} rows · ${m.series.src}`;
-  }
+    $("dailySrcBadge").textContent=m.series.src;
+  } else { $("dailySrcBadge").textContent=""; }
 }
 function renderCards(m){
   const C=$("cards");
@@ -1379,7 +1438,7 @@ function renderCards(m){
 }
 function renderTable(m){
   const tb=$("tblBody");
-  if(!m || !m.rows.length){ tb.innerHTML=`<tr><td colspan="6" class="l" style="padding:34px;color:var(--muted)">No assessments in the selected range.</td></tr>`;
+  if(!m || !m.rows.length){ tb.innerHTML=`<tr><td colspan="8" class="l" style="padding:34px;color:var(--muted)">No assessments in the selected range.</td></tr>`;
     $("footAvg").textContent="—"; $("footWk").textContent="—"; return; }
   let rows=m.rows.slice();
   if(!state.sortAsc) rows.reverse();
@@ -1390,11 +1449,13 @@ function renderTable(m){
       const ar=r.diff>0?"▲":r.diff<0?"▼":"";
       diffHtml=`<span class="${cls}">${fmtDiff(r.diff)}<span class="ar">${ar}</span></span>`;
     }
-    const wk = r.weekly!=null ? `<td class="wk-c">${fmt(r.weekly)}</td>` : `<td class="wk-blank">—</td>`;
+    const wk = r.weekly!=null ? `<td class="wk-c tk">${fmt(r.weekly)}</td>` : `<td class="wk-blank tk">—</td>`;
     return `<tr>
       <td class="l mono">${fdate(r.d)}</td>
       <td class="l wd">${WD3[pd(r.d).getDay()]}</td>
-      <td class="l code-c">${esc(m.series.code)}</td>
+      <td class="l code-c tk">${esc(m.series.code)}</td>
+      <td class="price-c hi-c">${r.high!=null?fmt(r.high):"—"}</td>
+      <td class="price-c lo-c tk">${r.low!=null?fmt(r.low):"—"}</td>
       <td class="price-c">${fmt(r.p)}</td>
       <td class="diff-c">${diffHtml}</td>
       ${wk}</tr>`;
@@ -1442,6 +1503,12 @@ function renderChart(pts){
   pts.forEach((p,i)=>{ const x=X(p.t).toFixed(1), y=Y(p.p).toFixed(1);
     dLine+=(i?"L":"M")+x+" "+y+" "; });
   dArea = dLine + `L ${X(t1).toFixed(1)} ${(H-padB).toFixed(1)} L ${X(t0).toFixed(1)} ${(H-padB).toFixed(1)} Z`;
+  // highest / lowest close markers with labels (#7)
+  let marks=""; const mk=window.__mark;
+  if(mk){ [[mk.hi,"var(--up)",true],[mk.lo,"var(--down)",false]].forEach(a=>{ const pt=a[0]; if(!pt||pt.d==null) return;
+    const x=X(pd(pt.d).getTime()), y=Y(pt.p);
+    marks+=`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" fill="${a[1]}" stroke="var(--surface)" stroke-width="1.5"/>`
+      +`<text x="${x.toFixed(1)}" y="${(y+(a[2]?-9:16)).toFixed(1)}" text-anchor="middle" font-family="IBM Plex Mono" font-size="10" font-weight="700" fill="${a[1]}">${nf.format(pt.p)}</text>`; }); }
 
   wrap.innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
     <defs>
@@ -1453,6 +1520,7 @@ function renderChart(pts){
     ${grid}
     <path d="${dArea}" fill="url(#ag)"/>
     <path d="${dLine}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    ${marks}
     ${ylab}${xlab}
     <line id="cx" x1="0" y1="${padT}" x2="0" y2="${H-padB}" stroke="var(--gold)" stroke-width="1" stroke-dasharray="3 3" opacity="0"/>
     <circle id="cdot" r="4.5" fill="var(--surface)" stroke="var(--accent)" stroke-width="2.5" opacity="0"/>
@@ -1488,7 +1556,6 @@ function niceTicks(min,max,count){
   for(let v=start; v<=max+1e-9; v+=step) out.push(+v.toFixed(6));
   return out;
 }
-//hi guys
 function renderMonthlyChart(pairs){
   const wrap=$("mChartWrap");
   const pts=(pairs||[]).map(([d,v])=>({t:pd(d).getTime(), p:v, d}));

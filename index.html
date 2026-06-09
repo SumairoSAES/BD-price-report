@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Pricing Terminal · PLATTS × ICIS</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -376,7 +379,7 @@ tbody td{padding:3px 10px;line-height:1.35}
   <div class="page" id="pageDaily">
   <div class="topbar2">
     <div class="title-block">
-      <p class="kicker">Daily Pricing Report</p>
+      <p class="kicker">Daily Pricing Report <span style="margin-left:8px;padding:1px 7px;border-radius:20px;background:var(--accent);color:#fff;font-size:9px;letter-spacing:.5px;vertical-align:middle">BUILD 2026-06-09 · MT-FIX + HL-ICIS</span></p>
       <h1>Pricing Terminal</h1>
     </div>
     <div class="spacer"></div>
@@ -846,24 +849,36 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       if (lab==="selected currency" || (curRow===-1 && lab==="original currency")) curRow=u;
     }
     var headerLen = (rows[commRow]||[]).length;
+    // group the (up to 3) columns of each commodity by base name, mapping (Low)/(High)/(Mid)
+    var groups={}, order=[];
     for (var c=dateCol+1;c<headerLen;c++){
       var full = S(cell(rows,commRow,c));
       if (!full) continue;
-      var meta = (icisMap && icisMap[full]) || null;
-      var code = meta ? meta.code : full.slice(0,40);
-      var prod = meta ? meta.prod : full.split(/\s+/)[0];
-      var uom  = (uomRow>=0 ? S(cell(rows,uomRow,c)) : "") || (meta ? meta.uom : "tonne");
-      var cur  = (curRow>=0 ? S(cell(rows,curRow,c)) : "") || (meta ? meta.cur : "USD");
-      var data = [];
-      for (var r=commRow+1;r<rows.length;r++){
-        var d = toDateStr(cell(rows,r,dateCol));
-        if (!d) continue;
-        var p = num(cell(rows,r,c));
-        if (p != null) data.push([d,p]);
-      }
-      data.sort(function(a,b){ return a[0]<b[0]?-1:a[0]>b[0]?1:0; });
-      out.push({src:"ICIS",code:code,comm:full,prod:prod,uom:uom,cur:cur,data:data});
+      var bm = full.match(/\((low|high|mid)\)/i);
+      var bate = bm ? bm[1].toLowerCase() : "mid";
+      var base = full.replace(/\s*\((?:low|high|mid)\)\s*/i," ").replace(/\s+/g," ").trim();
+      if (!groups[base]){ groups[base]={cols:{}, names:{}}; order.push(base); }
+      groups[base].cols[bate]=c; groups[base].names[bate]=full;
     }
+    function icisSer(col){
+      var a=[]; if(col==null) return a;
+      for (var r=commRow+1;r<rows.length;r++){ var d=toDateStr(cell(rows,r,dateCol)); if(!d) continue; var p=num(cell(rows,r,col)); if(p!=null) a.push([d,p]); }
+      a.sort(function(x,y){ return x[0]<y[0]?-1:x[0]>y[0]?1:0; });
+      return a;
+    }
+    order.forEach(function(base){
+      var g=groups[base];
+      var midCol = g.cols.mid!=null ? g.cols.mid : (g.cols.low!=null ? g.cols.low : g.cols.high);
+      var canonical = g.names.mid || g.names.low || g.names.high;
+      var meta = (icisMap && icisMap[canonical]) || null;
+      var code = meta ? meta.code : canonical.slice(0,40);
+      var prod = meta ? meta.prod : canonical.split(/\s+/)[0];
+      function lbl(row){ for(var k in g.cols){ var v=S(cell(rows,row,g.cols[k])); if(v) return v; } return ""; }
+      var uom = (uomRow>=0 ? lbl(uomRow) : "") || (meta ? meta.uom : "tonne");
+      var cur = (curRow>=0 ? lbl(curRow) : "") || (meta ? meta.cur : "USD");
+      out.push({src:"ICIS", code:code, comm:canonical, prod:prod, uom:uom, cur:cur,
+                data:icisSer(midCol), high:icisSer(g.cols.high), low:icisSer(g.cols.low)});
+    });
     return out;
   }
 
@@ -909,20 +924,39 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     var warnings = [];
     if (byType.PLATTS_DATA){
       var plattsFiles = byType.PLATTS_DATA;
-      // prefer a file that has two PLATTS data sheets (target + original)
+      // A *real* PLATTS data sheet has an "AssessDate" marker with actual dates below it.
+      // (The loose "PLATTS MARKET DATA" title also appears on Instructions/DataDictionary
+      //  sheets, so it must NOT be used to count data sheets.)
       function dataSheets(f){
         return Object.keys(f.sheets).filter(function(nm){
+          if(/instruction|dictionar|legend|note|readme|cover|glossar|about|info/i.test(nm)) return false;
           var rs=f.sheets[nm]||[];
-          for(var i=0;i<Math.min(rs.length,40);i++){ var row=rs[i]||[]; for(var j=0;j<row.length;j++){
-            if(/PLATTS MARKET DATA/i.test(S(row[j]))) return true;
+          for(var i=0;i<Math.min(rs.length,60);i++){ var row=rs[i]||[]; for(var j=0;j<row.length;j++){
             if(S(row[j])==="AssessDate" && (isDateCell(cell(rs,i+1,j))||isDateCell(cell(rs,i+2,j)))) return true;
           } }
           return false;
         });
       }
-      var pf=null, pds=[];
-      for (var pfi=0; pfi<plattsFiles.length; pfi++){ var ds2=dataSheets(plattsFiles[pfi]); if(ds2.length>=2){ pf=plattsFiles[pfi]; pds=ds2; break; } }
-      if (!pf){ pf=plattsFiles[0]; pds=dataSheets(pf); if(!pds.length) pds=Object.keys(pf.sheets); }
+      // Does the file contain a converted/standardized (FIXED UNITS / FX-HISTORY) sheet?
+      function hasFixedSheet(f){
+        return Object.keys(f.sheets).some(function(nm){
+          if(/fixed/i.test(nm)) return true;
+          var rs=f.sheets[nm]||[];
+          for(var i=0;i<Math.min(rs.length,30);i++){ var row=rs[i]||[]; for(var j=0;j<row.length;j++){ if(/FX-?HISTORY/i.test(S(row[j]))) return true; } }
+          return false;
+        });
+      }
+      // A sheet literally named "...FIXED..." is the hallmark of the new two-sheet format.
+      function hasFixedName(f){ return Object.keys(f.sheets).some(function(nm){ return /fixed/i.test(nm); }); }
+      // Pick the BEST PLATTS file regardless of order.
+      var pf=null, pds=[], bestScore=-1;
+      plattsFiles.forEach(function(f){
+        var ds2=dataSheets(f);
+        var score=(hasFixedName(f)?1000:0) + ds2.length*10 + (hasFixedSheet(f)?100:0);
+        if(score>bestScore){ bestScore=score; pf=f; pds=ds2; }
+      });
+      if(!pf){ pf=plattsFiles[0]; pds=dataSheets(pf); }
+      if(!pds.length) pds=Object.keys(pf.sheets);
       // classify each data sheet: fixed/target (FX-HISTORY or "fixed") vs original
       function isFixed(nm){
         if(/fixed/i.test(nm)) return true;
@@ -1119,7 +1153,7 @@ async function handleFiles(fileList){
 async function tryAutoFetch(){
   // cache-bust so an updated file on the host is always picked up
   const bust="?_="+Date.now();
-  const cand=["Daily_Historical_Petchem_Asia2.xlsx","Daily_Historical_Petchem_Asia1.xlsx","Daily_Historical_Petchem_Asia.xlsx","PLATTS.xlsx","ICIS.xlsx","ICIS_MAPPING.xlsx","Mapping_List.xlsx","Mapping List.xlsx"];
+  const cand=["Daily_Historical_Petchem_Asia1.xlsx","Daily_Historical_Petchem_Asia.xlsx","Daily_Historical_Petchem_Asia2.xlsx","PLATTS.xlsx","ICIS.xlsx","ICIS_MAPPING.xlsx","Mapping_List.xlsx","Mapping List.xlsx"];
   const files=[];
   for(const name of cand){
     try{ const r=await fetch(encodeURIComponent(name)+bust,{cache:"no-store"}); if(!r.ok) continue; const buf=await r.arrayBuffer();

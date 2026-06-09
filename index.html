@@ -272,6 +272,26 @@ tbody tr:hover td{background:var(--surface2)}
 .mtbl tfoot td{border-top:2px solid var(--ink);font-weight:700;background:var(--surface2);font-family:"IBM Plex Mono",monospace;padding:8px 10px}
 .mtbl tfoot td:first-child{font-family:"Archivo";color:var(--ink);text-transform:uppercase;font-size:9.5px;letter-spacing:.1em}
 .mtbl td.cur{color:var(--accent)}
+/* ---- compact 2-column Daily Index grid (fits all rows in one view) ---- */
+.idxgrid{display:flex;gap:46px;align-items:flex-start;overflow-x:auto;padding-bottom:8px}
+.idxcol{flex:0 0 auto;min-width:0}
+.idxtbl{width:auto;border-collapse:collapse;table-layout:auto;font-size:10px}
+.idxtbl th{text-align:right;padding:3px 8px;font-family:"Archivo";font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:var(--muted);border-bottom:1.6px solid var(--ink);white-space:nowrap;background:var(--surface);position:sticky;top:0}
+.idxtbl th.l{text-align:left}
+.idxtbl td{padding:1.5px 8px;border-bottom:1px solid var(--line);white-space:nowrap;font-family:"IBM Plex Mono",monospace;text-align:right;line-height:1.4}
+.idxtbl td.l{text-align:left}
+.idxtbl td.idn{color:var(--muted);font-size:9px}
+.idxtbl td.code-c{font-family:"IBM Plex Mono",monospace;color:var(--accent);font-size:10px;font-weight:600;white-space:nowrap}
+.idxtbl td.tcell{font-family:"Archivo";font-weight:600;color:var(--ink2)}
+.idxtbl .ctext{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
+.idxtbl td.u{color:var(--muted);font-family:"Archivo";font-size:9px}
+.idxtbl td.dt{color:var(--muted);font-size:9px}
+.idxtbl td.cur{color:var(--ink)}
+.idxtbl td.hi{color:var(--up)} .idxtbl td.lo{color:var(--down)}
+.idxtbl td.up{color:var(--up);font-weight:700} .idxtbl td.down{color:var(--down);font-weight:700}
+.idxtbl tbody tr:hover td{background:var(--surface2)}
+.idxtbl .srcdot{display:inline-block;width:6px;height:6px;border-radius:50%;vertical-align:middle;margin-right:6px}
+.idxtbl .ast{color:var(--down);font-weight:700;margin-left:1px}
 .msel{width:100%;appearance:none;padding:9px 32px 9px 12px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);font-family:"Archivo";font-size:13px;font-weight:600;color:var(--ink);cursor:pointer}
 .msel:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(13,148,136,.12)}
 .mselwrap{position:relative}
@@ -568,9 +588,7 @@ tbody td{padding:3px 10px;line-height:1.35}
         <h3>Index — <span id="idxDateLbl"></span></h3>
         <div class="pright"><span class="meta" id="idxMeta"></span><button class="csvbtn" id="csvIndex">⤓ CSV</button></div>
       </div>
-      <div class="tbl-scroll" style="max-height:none">
-        <table class="mtbl" id="idxTable"><thead id="idxThead"></thead><tbody id="idxTbody"></tbody></table>
-      </div>
+      <div id="idxGrid" class="idxgrid"></div>
     </div>
   </div><!-- /pageIndex -->
 
@@ -866,17 +884,31 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       a.sort(function(x,y){ return x[0]<y[0]?-1:x[0]>y[0]?1:0; });
       return a;
     }
+    // turn "...Acetic Acid CFR Asia NE Assessment Spot 2-6 Weeks ... (Mid) : USD/tonne"
+    //   into a short readable name "Acetic Acid CFR Asia NE"
+    function cleanIcisName(full){
+      var s = full.replace(/\s*\((?:low|high|mid)\)\s*:.*$/i, "");   // drop "(Mid) : USD/tonne"
+      s = s.replace(/\s+Assessment\b.*$/i, "");                       // drop "Assessment Spot ... Weekly"
+      s = s.replace(/\s+/g, " ").trim();
+      return s || full;
+    }
+    function icisProduct(name){
+      var m = name.match(/^(.*?)\s+(?:CFR|FOB|CIF|DEL|FCA|EXW|DDP|FD|DAP|Ex-?Tank|Ex-?Warehouse|Domestic|Bulk|Spot)\b/i);
+      return (m && m[1].trim()) || name.split(/\s+/).slice(0,2).join(" ") || name;
+    }
     order.forEach(function(base){
       var g=groups[base];
       var midCol = g.cols.mid!=null ? g.cols.mid : (g.cols.low!=null ? g.cols.low : g.cols.high);
-      var canonical = g.names.mid || g.names.low || g.names.high;
+      var canonical = g.names.mid || g.names.low || g.names.high;   // full name (for optional mapping lookup)
       var meta = (icisMap && icisMap[canonical]) || null;
-      var code = meta ? meta.code : canonical.slice(0,40);
-      var prod = meta ? meta.prod : canonical.split(/\s+/)[0];
+      var clean = cleanIcisName(canonical);
+      var comm = clean;
+      var code = meta ? meta.code : clean;
+      var prod = meta ? meta.prod : icisProduct(clean);
       function lbl(row){ for(var k in g.cols){ var v=S(cell(rows,row,g.cols[k])); if(v) return v; } return ""; }
       var uom = (uomRow>=0 ? lbl(uomRow) : "") || (meta ? meta.uom : "tonne");
       var cur = (curRow>=0 ? lbl(curRow) : "") || (meta ? meta.cur : "USD");
-      out.push({src:"ICIS", code:code, comm:canonical, prod:prod, uom:uom, cur:cur,
+      out.push({src:"ICIS", code:code, comm:comm, prod:prod, uom:uom, cur:cur,
                 data:icisSer(midCol), high:icisSer(g.cols.high), low:icisSer(g.cols.low)});
     });
     return out;
@@ -922,6 +954,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
 
     var series = [];
     var warnings = [];
+    var srcInfo = { platts:"", icis:"" };
     if (byType.PLATTS_DATA){
       var plattsFiles = byType.PLATTS_DATA;
       // A *real* PLATTS data sheet has an "AssessDate" marker with actual dates below it.
@@ -972,12 +1005,13 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       var tList = parsePlatts(pf.sheets[tName]||[], plattsMap);
       var oList = oName ? parsePlatts(pf.sheets[oName]||[], plattsMap) : [];
       series = series.concat(mergePlattsReps(tList, oList));
+      srcInfo.platts = (pf && pf.name ? pf.name : "?") + " → " + [tName, oName].filter(Boolean).join(" + ");
     } else { warnings.push("PLATTS data file not found"); }
 
     if (byType.ICIS_DATA){
       var icf = byType.ICIS_DATA[0];
-      if (!icisMap) warnings.push("ICIS mapping not found — ICIS codes/products will be unfriendly");
       series = series.concat(parseIcis(icf.sheets["ICIS"] || icf.sheets[Object.keys(icf.sheets)[0]] || [], icisMap));
+      srcInfo.icis = (icf && icf.name ? icf.name : "?");
     } else { warnings.push("ICIS data file not found"); }
 
     // keep only series that actually have data
@@ -993,7 +1027,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
     var d = new Date();
     var gen = d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")+" "+
               String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
-    return { generated: gen, series: series, counts: counts, warnings: warnings, byType: Object.keys(byType) };
+    return { generated: gen, series: series, counts: counts, warnings: warnings, byType: Object.keys(byType), sources: srcInfo };
   }
 
   var api = { buildDataset: buildDataset, classify: classify, toDateStr: toDateStr };
@@ -1153,7 +1187,7 @@ async function handleFiles(fileList){
 async function tryAutoFetch(){
   // cache-bust so an updated file on the host is always picked up
   const bust="?_="+Date.now();
-  const cand=["Daily_Historical_Petchem_Asia1.xlsx","Daily_Historical_Petchem_Asia.xlsx","Daily_Historical_Petchem_Asia2.xlsx","PLATTS.xlsx","ICIS.xlsx","ICIS_MAPPING.xlsx","Mapping_List.xlsx","Mapping List.xlsx"];
+  const cand=["Daily_Historical_Petchem_Asia1.xlsx","Daily_Historical_Petchem_Asia.xlsx","Daily_Historical_Petchem_Asia2.xlsx","PLATTS.xlsx","ICIS.xlsx"];
   const files=[];
   for(const name of cand){
     try{ const r=await fetch(encodeURIComponent(name)+bust,{cache:"no-store"}); if(!r.ok) continue; const buf=await r.arrayBuffer();
@@ -1170,8 +1204,11 @@ function finishLoad(ds){
   $("loading").classList.remove("show");
   $("app").style.display="block";
   const warn = ds.warnings && ds.warnings.length ? "  ·  ⚠ "+ds.warnings.length : "";
-  $("dataChipText").textContent = (ds.counts.PLATTS+ds.counts.ICIS)+" series · updated "+ds.generated+warn;
-  $("dataChip").title = ((ds.warnings&&ds.warnings.length)? ds.warnings.join("\n")+"\n":"")+"PLATTS "+ds.counts.PLATTS+" · ICIS "+ds.counts.ICIS+" · "+ds.counts.points+" points";
+  const src = ds.sources || {platts:"",icis:""};
+  $("dataChipText").textContent = (ds.counts.PLATTS+ds.counts.ICIS)+" series · updated "+ds.generated + (src.platts?"  ·  PLATTS: "+src.platts:"") + warn;
+  $("dataChip").title = ((ds.warnings&&ds.warnings.length)? ds.warnings.join("\n")+"\n":"")
+    + "PLATTS source: "+(src.platts||"—")+"\nICIS source: "+(src.icis||"—")
+    + "\nPLATTS "+ds.counts.PLATTS+" · ICIS "+ds.counts.ICIS+" · "+ds.counts.points+" points";
   init();
 }
 (function wireLoad(){
@@ -1440,27 +1477,40 @@ function renderIndex(){
   const date=state.idxDate||iso(GMAX);
   $("idxDateLbl").textContent=fdate(date);
   if($("idxDate")) $("idxDate").value=date;
-  const head=["#","Code","Commodity","Unit","Price","As of","Δ vs Prev","3Y High","High Date","3Y Low","Low Date"];
-  $("idxThead").innerHTML="<tr>"+head.map((h,i)=>`<th class="${i>=4&&i!==5&&i!==8&&i!==10?'':'l'}">${h}</th>`).join("")+"</tr>";
   const rows=indexRows(date);
-  let body="";
-  rows.forEach(r=>{ const dcls=r.diff==null?"":(r.diff>0?"up":r.diff<0?"down":"");
+  $("idxMeta").textContent=rows.length+" commodities · "+enabledSrcs().join("+")+"  ·  * = last available before date";
+  if(!rows.length){ $("idxGrid").innerHTML=`<div style="padding:30px;color:var(--muted)">No data on or before this date.</div>`; return; }
+  const head='<thead><tr>'
+    +'<th class="l">#</th>'
+    +'<th class="l">Code</th>'
+    +'<th class="l tk">Commodity</th>'
+    +'<th class="l tk">Unit</th>'
+    +'<th>Price</th>'
+    +'<th class="tk">Δ vs Prev</th>'
+    +'<th>3Y High</th>'
+    +'<th class="l tk">High Date</th>'
+    +'<th>3Y Low</th>'
+    +'<th class="l tk">Low Date</th>'
+    +'</tr></thead>';
+  function rowHtml(r){
+    const dcls=r.diff==null?"":(r.diff>0?"up":r.diff<0?"down":"");
     const asofTxt=r.asof===date?"":fdate(r.asof);
-    body+=`<tr>
-      <td class="l">${r.n}</td>
-      <td class="l code-c">${esc(r.s.code)}</td>
-      <td class="l">${esc(r.s.comm)} <span class="srcbadge" style="background:${r.s.src==='ICIS'?'var(--accent)':'var(--navy)'}">${r.s.src}</span></td>
-      <td class="l">${r.rep.cur}/${r.rep.uom}</td>
-      <td class="cur">${fmt(r.price)}</td>
-      <td class="l" style="color:${asofTxt?'var(--down)':'var(--muted)'};font-size:11px">${asofTxt||'on date'}</td>
-      <td class="cur ${dcls}">${r.diff==null?'—':fmtDiff(r.diff)}</td>
-      <td class="cur">${r.H?fmt(r.H.v):'—'}</td>
-      <td class="l" style="font-size:11px">${r.H?fdate(r.H.d):'—'}</td>
-      <td class="cur">${r.L?fmt(r.L.v):'—'}</td>
-      <td class="l" style="font-size:11px">${r.L?fdate(r.L.d):'—'}</td>
-    </tr>`; });
-  $("idxTbody").innerHTML=body || `<tr><td colspan="11" style="padding:30px;color:var(--muted)">No data on or before this date.</td></tr>`;
-  $("idxMeta").textContent=rows.length+" commodities · "+enabledSrcs().join("+");
+    return '<tr>'
+      +'<td class="l idn">'+r.n+'</td>'
+      +'<td class="l code-c">'+esc(r.s.code)+'</td>'
+      +'<td class="l tk tcell"><span class="srcdot" style="background:'+(r.s.src==='ICIS'?'var(--accent)':'var(--navy)')+'" title="'+r.s.src+'"></span><span class="ctext" title="'+esc(r.s.comm)+'">'+esc(r.s.comm)+'</span></td>'
+      +'<td class="l tk u">'+r.rep.cur+'/'+r.rep.uom+'</td>'
+      +'<td class="cur" title="'+(asofTxt?('as of '+asofTxt):'on date')+'">'+fmt(r.price)+(asofTxt?'<span class="ast">*</span>':'')+'</td>'
+      +'<td class="cur tk '+dcls+'">'+(r.diff==null?'—':fmtDiff(r.diff))+'</td>'
+      +'<td class="cur hi">'+(r.H?fmt(r.H.v):'—')+'</td>'
+      +'<td class="l tk dt">'+(r.H?fdate(r.H.d):'—')+'</td>'
+      +'<td class="cur lo">'+(r.L?fmt(r.L.v):'—')+'</td>'
+      +'<td class="l tk dt">'+(r.L?fdate(r.L.d):'—')+'</td>'
+      +'</tr>';
+  }
+  const half=Math.ceil(rows.length/2);
+  const cols=[rows.slice(0,half), rows.slice(half)];
+  $("idxGrid").innerHTML = cols.map(function(c){ return '<div class="idxcol"><table class="idxtbl">'+head+'<tbody>'+c.map(rowHtml).join("")+'</tbody></table></div>'; }).join("");
 }
 function exportIndexCSV(){
   const date=state.idxDate||iso(GMAX); const rows=indexRows(date);
